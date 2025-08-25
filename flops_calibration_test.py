@@ -185,6 +185,13 @@ def main():
     calibration_setups = [
         (3, 2),  # A "light" calibration with fewer points
         (6, 4),  # A more "thorough" calibration with more points
+        (12, 8),
+        (24, 16),
+        (48, 32),
+        (96, 64),
+        (192, 128),
+        (384, 256),
+        (768, 512),
     ]
 
     # A larger, more varied test grid to evaluate the calibration accuracy
@@ -192,7 +199,11 @@ def main():
     test_grid = [
         (10, 20), (32, 32), (50, 200),
         (128, 64), (200, 50), (256, 256),
-        (500, 1), (5, 512)
+        (500, 1), (5, 512), 
+        (1000, 1000), (400, 3283),
+        (214, 332), (418, 2234),
+        (73, 156), (341, 89), (157, 423),
+        (92, 1078), (567, 234), (789, 45)
     ]
 
     # --- Script Execution ---
