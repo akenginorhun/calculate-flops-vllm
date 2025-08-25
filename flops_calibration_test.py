@@ -182,7 +182,7 @@ def main():
     multiple calibration setups by sampling from the training set.
     """
     # --- Parameters to Change ---
-    model_name = "sshleifer/tiny-gpt2"
+    model_name = "google/gemma-2b"
 
     # Define the number of points to use for calibration in each test run.
     # Each tuple means (num_points_for_prefill_fit, num_points_for_decode_fit)
