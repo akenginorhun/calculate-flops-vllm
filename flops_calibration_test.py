@@ -2,6 +2,7 @@ import torch
 import numpy as np
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from calflops import calculate_flops
+import random
 
 def load_model(model_name):
     """
