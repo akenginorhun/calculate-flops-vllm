@@ -210,27 +210,17 @@ def main():
     # Load the model only once
     model, tokenizer = load_model(model_name)
 
-    for i, (num_prefill, num_decode) in enumerate(calibration_setups):
-        print(f"\n{'='*50}")
-        print(f"--- Running Test Setup {i+1}: {num_prefill} prefill points, {num_decode} decode points ---")
-        print(f"{'='*50}")
-
-        # Generate the calibration points dynamically based on the setup
-        # Using linspace to get a good spread of points up to a reasonable limit (e.g., 512)
-        prefill_cal_points = np.linspace(start=16, stop=512, num=num_prefill, dtype=int)
-        # For decode, the range is less important as it should be constant, but we still sample
-        decode_cal_points = np.linspace(start=16, stop=256, num=num_decode, dtype=int)
-
+    for num_prefill_points, num_decode_points in calibration_setups:
         print(f"Prefill calibration points (prompt lengths): {prefill_cal_points}")
         print(f"Decode calibration points (generation lengths): {decode_cal_points}")
 
-        # Run calibration with the current setup
+        # Run calibration with the current setup.
         prefill_func, decode_flop_per_token = calibrate(model, tokenizer, prefill_cal_points, decode_cal_points)
         
-        # Run the test against the common test grid
+        # Run the test against the common test grid.
         results = run_test(model, tokenizer, prefill_func, decode_flop_per_token, test_grid)
         
-        # Report the results for this specific setup
+        # Report the results for this specific setup.
         report_results(results)
 
 
