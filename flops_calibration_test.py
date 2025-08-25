@@ -23,45 +23,27 @@ def load_model(model_name):
 def get_ground_truth_flops(model, tokenizer, prompt_len, gen_len):
     """
     Measures the ground-truth FLOPs for prefill and decode using calflops.
-
-    Args:
-        model (torch.nn.Module): The model to measure.
-        tokenizer: The tokenizer for the model.
-        prompt_len (int): The length of the prompt.
-        gen_len (int): The length of the generated sequence.
-
-    Returns:
-        tuple: A tuple containing the prefill and per-token decode FLOPs as floats.
+    Uses a more robust method for decode FLOPs calculation.
     """
+    # ... (the safety checks for max_len can remain if you have them) ...
+    
     # Prefill
     inputs = tokenizer("a" * prompt_len, return_tensors="pt")
-    # Set output_as_string=False to get a direct numerical output
-    prefill_flops, _, _ = calculate_flops(model=model, 
-                                          kwargs=inputs, 
-                                          print_results=False, 
-                                          output_as_string=False)
+    prefill_flops, _, _ = calculate_flops(model=model, kwargs=inputs, print_results=False, output_as_string=False)
 
     # Decode
-    # To measure per-token decode FLOPs, we measure total FLOPs for N and N+1 tokens
-    # and take the difference.
     if gen_len > 0:
-        inputs_n = tokenizer("a" * (prompt_len + gen_len - 1), return_tensors="pt")
-        flops_n, _, _ = calculate_flops(model=model, 
-                                        kwargs=inputs_n, 
-                                        print_results=False, 
-                                        output_as_string=False)
-
-        inputs_n_plus_1 = tokenizer("a" * (prompt_len + gen_len), return_tensors="pt")
-        flops_n_plus_1, _, _ = calculate_flops(model=model, 
-                                               kwargs=inputs_n_plus_1, 
-                                               print_results=False, 
-                                               output_as_string=False)
+        # --- ROBUST DECODE LOGIC ---
+        # Measure total FLOPs for the full sequence (prompt + generation)
+        total_inputs = tokenizer("a" * (prompt_len + gen_len), return_tensors="pt")
+        total_flops, _, _ = calculate_flops(model=model, kwargs=total_inputs, print_results=False, output_as_string=False)
         
-        decode_flops = flops_n_plus_1 - flops_n
+        # The total decode FLOPs is the total FLOPs minus the prefill FLOPs.
+        total_decode_flops = total_flops - prefill_flops
     else:
-        decode_flops = 0.0
+        total_decode_flops = 0.0
 
-    return prefill_flops, decode_flops
+    return prefill_flops, total_decode_flops
 
 def calibrate(model, tokenizer, prefill_points, decode_points):
     """
@@ -125,7 +107,7 @@ def run_test(model, tokenizer, prefill_func, decode_flop_per_token, test_grid):
     print("\nRunning tests against ground truth...")
     results = []
     for prompt_len, gen_len in test_grid:
-        gt_prefill, gt_decode_per_token = get_ground_truth_flops(model, tokenizer, prompt_len, gen_len)
+        gt_prefill, gt_total_decode = get_ground_truth_flops(model, tokenizer, prompt_len, gen_len)
         gt_total_decode = gt_decode_per_token * gen_len
 
         pred_prefill, pred_total_decode = predict_flops(prefill_func, decode_flop_per_token, prompt_len, gen_len)
@@ -199,33 +181,111 @@ def main():
     ]
 
     # This is now our master dataset of possible prompt/generation lengths.
+    # This dataset is verified to be safe for models with a context size of 8192 tokens.
+    # For every pair (P, G), the condition P + G <= 8192 is met.
     full_dataset = [
-        # Short prompts with various outputs
-        (5, 10), (8, 25), (12, 50), (15, 75), (20, 100),
-        (25, 150), (30, 200), (35, 250), (40, 300), (45, 350),
-        
-        # Medium prompts with short outputs (chat/QA style)
-        (50, 20), (64, 30), (75, 40), (80, 50), (96, 60),
-        (100, 80), (120, 100), (128, 120), (150, 150), (180, 180),
-        
-        # Medium prompts with medium outputs (typical conversations)
-        (200, 200), (220, 250), (256, 300), (280, 350), (300, 400),
-        (320, 450), (350, 500), (380, 550), (400, 600), (450, 650),
-        
-        # Longer prompts with varied outputs
-        (500, 100), (512, 200), (550, 300), (600, 400), (650, 500),
-        (700, 250), (750, 350), (800, 450), (850, 550), (900, 650),
-        
-        # Very long prompts (document processing)
-        (1000, 50), (1024, 100), (1200, 200), (1500, 300), (1800, 400),
-        (2000, 500), (2048, 600), (2200, 700), (2500, 800), (3000, 1000),
-        
-        # Edge cases
-        (1, 1), (3, 5), (10, 2), (100, 1), (1000, 1),
-        (5, 1000), (50, 2000), (200, 1500), (500, 2500), (1000, 3000),
-        
-        # Common model context sizes
-        (512, 512), (1024, 1024), (2048, 2048), (4096, 1000), (8192, 500)
+        # --- 1. Tiny Prompts & Responses (Edge Cases & Startup Cost) ---
+        (1, 1), (2, 2), (3, 5), (5, 3), (8, 1), (1, 8),
+        (5, 10), (10, 5), (12, 12), (15, 20), (20, 15),
+
+        # --- 2. Common Chat & Q/A ---
+        # (Short-to-medium prompt, short-to-medium response)
+        (30, 80),      # A quick question and a direct answer
+        (45, 100),     # A follow-up question
+        (60, 120),     # A more detailed question and a paragraph response
+        (75, 40),      # Asking for a specific, short piece of information
+        (90, 150),     # Multi-turn conversation history with a new question
+        (100, 80),     # A concise question getting a direct answer
+        (128, 128),    # Balanced Q/A
+        (150, 100),    # A detailed prompt asking for a concise summary
+        (200, 250),    # Providing context and getting a detailed answer
+        (250, 50),     # A paragraph prompt asking for a single entity or fact
+        (300, 200),    # A moderate conversation thread
+
+        # --- 3. Instruction Following & Few-Shot Learning ---
+        # (Medium prompt with examples, medium response)
+        (256, 256),    # A balanced instruction-following task
+        (350, 150),    # Detailed instructions for a specific format output
+        (400, 400),    # Providing a few examples (few-shot) and a new query
+        (512, 200),    # A standard "role-play" or persona prompt
+        (600, 300),    # Complex instructions with constraints
+        (750, 250),    # A prompt with a couple of text examples to learn from
+
+        # --- 4. Code Generation & Explanation ---
+        # (Highly variable ratios)
+        (40, 200),     # "Write a Python function for X" -> function with docstrings
+        (80, 400),     # "Create a simple HTML page with this structure"
+        (250, 800),    # "Here's my class, add these methods and explain them"
+        (500, 100),    # "Explain what this short script does"
+        (800, 150),    # "Explain what this complex function does"
+        (1024, 512),   # Refactoring a moderately-sized function
+        (1200, 1000),  # "Refactor this large piece of legacy code"
+        (1500, 200),   # "Find the bug in this code snippet"
+
+        # --- 5. Summarization & Analysis ---
+        # (Long prompt, medium-to-short response)
+        (1000, 200),   # Summarizing a blog post
+        (1500, 250),   # Summarizing a few pages of a book
+        (2048, 300),   # Analyzing a document the size of the old context limit
+        (3000, 400),   # Summarizing a short research paper
+        (4096, 500),   # Analyzing a more substantial document
+        (5000, 350),   # Pulling key insights from a long article
+        (6000, 300),   # Creating an executive summary from a long report
+
+        # --- 6. Retrieval-Augmented Generation (RAG) ---
+        # (Very long prompt with context, concise response)
+        (2000, 100),   # Answering a question based on a few retrieved documents
+        (3500, 150),   # Synthesizing an answer from several sources
+        (4000, 80),    # Answering a question based on a large chunk of a knowledge base
+        (5500, 200),   # Multi-hop question answering
+        (6000, 100),   # Finding a specific fact within a massive context blob
+        (7500, 120),   # Synthesizing an answer from many different sources
+        (8000, 100),   # Pushing the context limit to get a very specific answer
+
+        # --- 7. Long-Form Generation (Creative Writing, Content Creation) ---
+        # (Short prompt, very long response)
+        (10, 1000),    # "Write a short story about..."
+        (25, 2048),    # "Write a blog post on the topic of..."
+        (50, 3000),    # "Continue this story..."
+        (100, 4000),   # A detailed outline for a chapter, asking the model to write it
+
+        # --- 8. Boundary & Stress Tests (All sums are <= 8192) ---
+        # (Testing the extremes and common context boundaries)
+        (1, 1023),     # Total 1024
+        (1023, 1),     # Total 1024
+        (512, 512),    # Total 1024
+        (1, 2047),     # Total 2048
+        (2047, 1),     # Total 2048
+        (1024, 1024),  # Total 2048
+        (1, 4095),     # Total 4096
+        (4095, 1),     # Total 4096
+        (2048, 2048),  # Total 4096
+        (3072, 1024),  # Total 4096
+        (1024, 3072),  # Total 4096
+        (1, 8191),     # Total 8192 (Max generation)
+        (8191, 1),     # Total 8192 (Max prompt)
+        (4096, 4096),  # Total 8192 (50/50 split)
+        (6144, 2048),  # Total 8192 (75/25 split)
+        (2048, 6144),  # Total 8192 (25/75 split)
+        (8000, 192),   # Total 8192 (Near max prompt)
+        (7800, 300),   # Total 8100 (High RAG)
+
+        # --- 9. Grid-like Coverage (Filling in the gaps) ---
+        # (A variety of points to ensure no large areas are untested)
+        (180, 600),
+        (450, 1200),
+        (700, 700),
+        (900, 350),
+        (1100, 800),
+        (1400, 1400),
+        (1800, 600),
+        (2200, 1800),
+        (2800, 1000),
+        (3200, 3200),
+        (3800, 2000),
+        (4500, 3000),
+        (5500, 2500),
+        (7000, 1100),
     ]
     random.shuffle(full_dataset) # Shuffle to ensure random splits
 
