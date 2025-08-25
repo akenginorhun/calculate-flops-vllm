@@ -189,7 +189,13 @@ def main():
     calibration_configs = [
         (3, 2),  # Use 3 points to fit prefill, 2 to fit decode
         (6, 4),
-        (12, 8)
+        (12, 8),
+        (24, 16),
+        (48, 32),
+        (96, 64),
+        (192, 128),
+        (384, 256),
+        (768, 512),
     ]
 
     # This is now our master dataset of possible prompt/generation lengths.
