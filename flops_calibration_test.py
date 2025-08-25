@@ -2,9 +2,65 @@ import torch
 import numpy as np
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from calflops import calculate_flops
-import random
 
-# ... (all of your other functions: load_model, get_ground_truth_flops, etc. remain exactly the same) ...
+def load_model(model_name):
+    """
+    Loads a model and tokenizer from Hugging Face onto the CPU.
+
+    Args:
+        model_name (str): The name of the model to load.
+
+    Returns:
+        tuple: A tuple containing the loaded model and tokenizer.
+    """
+    print(f"Loading model: {model_name}...")
+    model = AutoModelForCausalLM.from_pretrained(model_name)
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    print("Model loaded successfully.")
+    return model, tokenizer
+
+def get_ground_truth_flops(model, tokenizer, prompt_len, gen_len):
+    """
+    Measures the ground-truth FLOPs for prefill and decode using calflops.
+
+    Args:
+        model (torch.nn.Module): The model to measure.
+        tokenizer: The tokenizer for the model.
+        prompt_len (int): The length of the prompt.
+        gen_len (int): The length of the generated sequence.
+
+    Returns:
+        tuple: A tuple containing the prefill and per-token decode FLOPs as floats.
+    """
+    # Prefill
+    inputs = tokenizer("a" * prompt_len, return_tensors="pt")
+    # Set output_as_string=False to get a direct numerical output
+    prefill_flops, _, _ = calculate_flops(model=model, 
+                                          kwargs=inputs, 
+                                          print_results=False, 
+                                          output_as_string=False)
+
+    # Decode
+    # To measure per-token decode FLOPs, we measure total FLOPs for N and N+1 tokens
+    # and take the difference.
+    if gen_len > 0:
+        inputs_n = tokenizer("a" * (prompt_len + gen_len - 1), return_tensors="pt")
+        flops_n, _, _ = calculate_flops(model=model, 
+                                        kwargs=inputs_n, 
+                                        print_results=False, 
+                                        output_as_string=False)
+
+        inputs_n_plus_1 = tokenizer("a" * (prompt_len + gen_len), return_tensors="pt")
+        flops_n_plus_1, _, _ = calculate_flops(model=model, 
+                                               kwargs=inputs_n_plus_1, 
+                                               print_results=False, 
+                                               output_as_string=False)
+        
+        decode_flops = flops_n_plus_1 - flops_n
+    else:
+        decode_flops = 0.0
+
+    return prefill_flops, decode_flops
 
 def calibrate(model, tokenizer, prefill_points, decode_points):
     """
@@ -52,6 +108,7 @@ def predict_flops(prefill_func, decode_flop_per_token, prompt_len, gen_len):
     # Total decode FLOPs is per-token FLOPs multiplied by the number of tokens
     total_decode_flops = decode_flop_per_token * gen_len
     return prefill_flops, total_decode_flops
+
 
 def run_test(model, tokenizer, prefill_func, decode_flop_per_token, test_grid):
     """
