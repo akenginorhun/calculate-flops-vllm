@@ -19,7 +19,6 @@ from calflops import calculate_flops
 import logging
 import warnings
 from typing import List, Tuple, Dict, Optional
-import matplotlib.pyplot as plt
 import time
 
 # Set up logging
