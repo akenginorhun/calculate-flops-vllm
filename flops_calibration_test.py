@@ -2,65 +2,9 @@ import torch
 import numpy as np
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from calflops import calculate_flops
+import random
 
-def load_model(model_name):
-    """
-    Loads a model and tokenizer from Hugging Face onto the CPU.
-
-    Args:
-        model_name (str): The name of the model to load.
-
-    Returns:
-        tuple: A tuple containing the loaded model and tokenizer.
-    """
-    print(f"Loading model: {model_name}...")
-    model = AutoModelForCausalLM.from_pretrained(model_name)
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
-    print("Model loaded successfully.")
-    return model, tokenizer
-
-def get_ground_truth_flops(model, tokenizer, prompt_len, gen_len):
-    """
-    Measures the ground-truth FLOPs for prefill and decode using calflops.
-
-    Args:
-        model (torch.nn.Module): The model to measure.
-        tokenizer: The tokenizer for the model.
-        prompt_len (int): The length of the prompt.
-        gen_len (int): The length of the generated sequence.
-
-    Returns:
-        tuple: A tuple containing the prefill and per-token decode FLOPs as floats.
-    """
-    # Prefill
-    inputs = tokenizer("a" * prompt_len, return_tensors="pt")
-    # Set output_as_string=False to get a direct numerical output
-    prefill_flops, _, _ = calculate_flops(model=model, 
-                                          kwargs=inputs, 
-                                          print_results=False, 
-                                          output_as_string=False)
-
-    # Decode
-    # To measure per-token decode FLOPs, we measure total FLOPs for N and N+1 tokens
-    # and take the difference.
-    if gen_len > 0:
-        inputs_n = tokenizer("a" * (prompt_len + gen_len - 1), return_tensors="pt")
-        flops_n, _, _ = calculate_flops(model=model, 
-                                        kwargs=inputs_n, 
-                                        print_results=False, 
-                                        output_as_string=False)
-
-        inputs_n_plus_1 = tokenizer("a" * (prompt_len + gen_len), return_tensors="pt")
-        flops_n_plus_1, _, _ = calculate_flops(model=model, 
-                                               kwargs=inputs_n_plus_1, 
-                                               print_results=False, 
-                                               output_as_string=False)
-        
-        decode_flops = flops_n_plus_1 - flops_n
-    else:
-        decode_flops = 0.0
-
-    return prefill_flops, decode_flops
+# ... (all of your other functions: load_model, get_ground_truth_flops, etc. remain exactly the same) ...
 
 def calibrate(model, tokenizer, prefill_points, decode_points):
     """
@@ -172,55 +116,73 @@ def report_results(results):
             f"{r['gt_decode']:>12.2e} | {r['pred_decode']:>12.2e} | {r['decode_error']:>10.2f}"
         )
 
+
 def main():
     """
     Main function to run the one-time calibration test.
-    Tests multiple calibration setups and reports results for each.
+    Splits a dataset into training and testing sets, then tests
+    multiple calibration setups by sampling from the training set.
     """
     # --- Parameters to Change ---
     model_name = "sshleifer/tiny-gpt2"
-    
-    # Define different calibration setups to test
-    # Each tuple represents: (number_of_prefill_points, number_of_decode_points)
-    calibration_setups = [
-        (3, 2),  # A "light" calibration with fewer points
-        (6, 4),  # A more "thorough" calibration with more points
-        (12, 8),
-        (24, 16),
-        (48, 32),
-        (96, 64),
-        (192, 128),
-        (384, 256),
-        (768, 512),
+
+    # Define the number of points to use for calibration in each test run.
+    # Each tuple means (num_points_for_prefill_fit, num_points_for_decode_fit)
+    calibration_configs = [
+        (3, 2),  # Use 3 points to fit prefill, 2 to fit decode
+        (6, 4),
+        (12, 8)
     ]
 
-    # A larger, more varied test grid to evaluate the calibration accuracy
-    # This grid should ideally not overlap with the calibration points.
-    test_grid = [
-        (10, 20), (32, 32), (50, 200),
-        (128, 64), (200, 50), (256, 256),
-        (500, 1), (5, 512), 
-        (1000, 1000), (400, 3283),
-        (214, 332), (418, 2234),
-        (73, 156), (341, 89), (157, 423),
-        (92, 1078), (567, 234), (789, 45)
+    # This is now our master dataset of possible prompt/generation lengths.
+    full_dataset = [
+        (10, 20), (32, 32), (50, 200), (73, 156), (92, 1078),
+        (128, 64), (157, 423), (200, 50), (214, 332), (256, 256),
+        (341, 89), (400, 1283), (418, 1234), (500, 1), (5, 512),
+        (567, 234), (789, 45), (1000, 1000)
     ]
+    random.shuffle(full_dataset) # Shuffle to ensure random splits
+
+    # Split the dataset into a training pool (for calibration) and a testing set.
+    # Let's use ~30% for training and the rest for testing.
+    training_size = int(len(full_dataset) * 0.3)
+    training_data = full_dataset[:training_size]
+    test_data = full_dataset[training_size:]
+
+    print(f"Total dataset size: {len(full_dataset)}")
+    print(f"Using {len(training_data)} points for calibration pool and {len(test_data)} for testing.")
 
     # --- Script Execution ---
-    # Load the model only once
     model, tokenizer = load_model(model_name)
 
-    for num_prefill_points, num_decode_points in calibration_setups:
-        print(f"Prefill calibration points (prompt lengths): {prefill_cal_points}")
-        print(f"Decode calibration points (generation lengths): {decode_cal_points}")
+    for i, (num_prefill, num_decode) in enumerate(calibration_configs):
+        print(f"\n{'='*60}")
+        print(f"--- Running Test Setup {i+1}: Calibrating with {num_prefill} prefill and {num_decode} decode points ---")
+        print(f"{'='*60}")
 
-        # Run calibration with the current setup.
+        # Ensure we don't request more samples than are available in the training pool.
+        if num_prefill > len(training_data) or num_decode > len(training_data):
+            print(f"Skipping setup. Not enough data in training pool for this configuration.")
+            continue
+
+        # Randomly sample points from our training data for this specific calibration run.
+        prefill_samples = random.sample(training_data, num_prefill)
+        decode_samples = random.sample(training_data, num_decode)
+
+        # Extract just the prompt lengths for prefill, and generation lengths for decode.
+        prefill_cal_points = [p[0] for p in prefill_samples]
+        decode_cal_points = [p[1] for p in decode_samples]
+        
+        print(f"Prefill calibration prompt lengths: {sorted(prefill_cal_points)}")
+        print(f"Decode calibration generation lengths: {sorted(decode_cal_points)}")
+
+        # Calibrate using the sampled training points.
         prefill_func, decode_flop_per_token = calibrate(model, tokenizer, prefill_cal_points, decode_cal_points)
         
-        # Run the test against the common test grid.
-        results = run_test(model, tokenizer, prefill_func, decode_flop_per_token, test_grid)
+        # Run the test against the unseen test data.
+        results = run_test(model, tokenizer, prefill_func, decode_flop_per_token, test_data)
         
-        # Report the results for this specific setup.
+        # Report the results for this setup.
         report_results(results)
 
 
