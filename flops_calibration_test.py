@@ -175,22 +175,52 @@ def report_results(results):
 def main():
     """
     Main function to run the one-time calibration test.
+    Tests multiple calibration setups and reports results for each.
     """
     # --- Parameters to Change ---
     model_name = "sshleifer/tiny-gpt2"
     
-    # Use more points for better calibration
-    prefill_cal_points = [16, 64, 128, 256]
-    decode_cal_points = [32, 96] # The per-token decode cost is constant, so fewer points are needed
-    
-    # A separate grid for testing the accuracy of the calibration
-    test_grid = [(32, 50), (96, 100), (192, 200)]
+    # Define different calibration setups to test
+    # Each tuple represents: (number_of_prefill_points, number_of_decode_points)
+    calibration_setups = [
+        (3, 2),  # A "light" calibration with fewer points
+        (6, 4),  # A more "thorough" calibration with more points
+    ]
+
+    # A larger, more varied test grid to evaluate the calibration accuracy
+    # This grid should ideally not overlap with the calibration points.
+    test_grid = [
+        (10, 20), (32, 32), (50, 200),
+        (128, 64), (200, 50), (256, 256),
+        (500, 1), (5, 512)
+    ]
 
     # --- Script Execution ---
+    # Load the model only once
     model, tokenizer = load_model(model_name)
-    prefill_func, decode_flop_per_token = calibrate(model, tokenizer, prefill_cal_points, decode_cal_points)
-    results = run_test(model, tokenizer, prefill_func, decode_flop_per_token, test_grid)
-    report_results(results)
+
+    for i, (num_prefill, num_decode) in enumerate(calibration_setups):
+        print(f"\n{'='*50}")
+        print(f"--- Running Test Setup {i+1}: {num_prefill} prefill points, {num_decode} decode points ---")
+        print(f"{'='*50}")
+
+        # Generate the calibration points dynamically based on the setup
+        # Using linspace to get a good spread of points up to a reasonable limit (e.g., 512)
+        prefill_cal_points = np.linspace(start=16, stop=512, num=num_prefill, dtype=int)
+        # For decode, the range is less important as it should be constant, but we still sample
+        decode_cal_points = np.linspace(start=16, stop=256, num=num_decode, dtype=int)
+
+        print(f"Prefill calibration points (prompt lengths): {prefill_cal_points}")
+        print(f"Decode calibration points (generation lengths): {decode_cal_points}")
+
+        # Run calibration with the current setup
+        prefill_func, decode_flop_per_token = calibrate(model, tokenizer, prefill_cal_points, decode_cal_points)
+        
+        # Run the test against the common test grid
+        results = run_test(model, tokenizer, prefill_func, decode_flop_per_token, test_grid)
+        
+        # Report the results for this specific setup
+        report_results(results)
 
 
 if __name__ == "__main__":
