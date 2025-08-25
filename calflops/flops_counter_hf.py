@@ -90,7 +90,8 @@ def calculate_flops_hf(model_name,
     
     calculate_flops_pipline = CalFlopsPipline(model=empty_model,
                                               include_backPropagation=include_backPropagation,
-                                              compute_bp_factor=compute_bp_factor)
+                                              compute_bp_factor=compute_bp_factor,
+                                              is_sparse=False)
     calculate_flops_pipline.start_flops_calculate(ignore_list=ignore_modules)
 
     if input_shape is not None:
@@ -119,7 +120,10 @@ def calculate_flops_hf(model_name,
         Error Information: %s\n.
         """ % (model_name, model_name, e)
         print(ErrorInformation)
-        return None, None, None
+        if return_results:
+            return None, None, None, None
+        else:
+            return None, None, None
     else:
         flops = calculate_flops_pipline.get_total_flops()
         macs = calculate_flops_pipline.get_total_macs()

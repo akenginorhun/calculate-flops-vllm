@@ -116,7 +116,7 @@ def generate_transformer_input(model_tokenizer, input_shape, device):
         inputs = model_tokenizer.encode_plus(
             inp_seq,
             add_special_tokens=True,
-            truncation_strategy='longest_first',
+            truncation=True,
         )
         origin_length = len(inputs["input_ids"])
         padding_length = max_length - origin_length
