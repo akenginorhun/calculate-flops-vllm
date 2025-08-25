@@ -66,10 +66,16 @@ def calibrate(model, tokenizer, prefill_points, decode_points):
     prefill_coeffs = np.polyfit(prefill_x, prefill_y, 2)
     prefill_func = np.poly1d(prefill_coeffs)
 
-    # Decode calibration (fitting a constant value, as per-token FLOPs should be constant)
-    decode_y = np.array([get_ground_truth_flops(model, tokenizer, 1, d)[1] for d in decode_points])
-    # Fit a constant (degree 0 polynomial) which is just the average
-    decode_flop_per_token = np.mean(decode_y)
+    # Decode calibration
+    # Get the TOTAL decode flops for generating d tokens
+    decode_y_total = np.array([get_ground_truth_flops(model, tokenizer, 1, d)[1] for d in decode_points])
+    
+    # To get per-token cost, divide total flops by number of tokens for each point
+    # We add a small epsilon to avoid division by zero if a decode point is 0
+    decode_per_token_costs = decode_y_total / (np.array(decode_points) + 1e-9)
+    
+    # The final calibrated value is the average of these per-token costs
+    decode_flop_per_token = np.mean(decode_per_token_costs)
     
     print("Calibration complete.")
     return prefill_func, decode_flop_per_token
@@ -107,8 +113,11 @@ def run_test(model, tokenizer, prefill_func, decode_flop_per_token, test_grid):
     print("\nRunning tests against ground truth...")
     results = []
     for prompt_len, gen_len in test_grid:
+        # This now correctly gets the ground truth total decode FLOPs directly.
         gt_prefill, gt_total_decode = get_ground_truth_flops(model, tokenizer, prompt_len, gen_len)
-        gt_total_decode = gt_decode_per_token * gen_len
+
+        # This was the line causing the error and has been removed.
+        # gt_total_decode = gt_decode_per_token * gen_len 
 
         pred_prefill, pred_total_decode = predict_flops(prefill_func, decode_flop_per_token, prompt_len, gen_len)
 
