@@ -22,7 +22,7 @@ max_seq_length = 128
 # print("%s FLOPs:%s  MACs:%s  Params:%s \n" %(model_name, flops, macs, params))
 
 access_token = os.getenv("HUGGINGFACE_HUB_TOKEN")
-model_name = "google-bert/bert-base-uncased"
+model_name = "Qwen/Qwen3-8B"
 flops, macs, params, print_results = calculate_flops_hf(model_name=model_name,
                                                         input_shape=(batch_size, max_seq_length),
                                                         forward_mode="forward",
